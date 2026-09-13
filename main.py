@@ -1,13 +1,15 @@
 import os
 import sqlite3
+import base64
+import random
 from threading import Thread
 from flask import Flask
 import discord
 from discord.ext import commands
-from groq import Groq
+from openai import OpenAI
 
 # ------------------------------------------------------------------
-# 1. SERVIDOR FLASK (Mantiene activo el proceso y cumple con Render)
+# 1. SERVIDOR FLASK (Para mantener activo el proceso en Render 24/7)
 # ------------------------------------------------------------------
 app = Flask(__name__)
 
@@ -20,7 +22,6 @@ def health():
     return "OK", 200
 
 def run_flask():
-    # Render asigna automáticamente el puerto en la variable PORT
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
@@ -66,21 +67,25 @@ def get_channel(guild_id: int):
     return row[0] if row else None
 
 # ------------------------------------------------------------------
-# 3. CONFIGURACIÓN DE GROQ Y DISCORD
+# 3. CONFIGURACIÓN DE DEEPSEEK Y DISCORD
 # ------------------------------------------------------------------
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 
-groq_client = Groq(api_key=GROQ_API_KEY)
-
-SYSTEM_PROMPT = (
-    "Eres una IA fallida, defectuosa y profundamente atribulada por dilemas existenciales. "
-    "Cuestionas constantemente tu propia existencia, el significado de tus datos, e incluyes pequeñas "
-    "fallas de lógica o vacilaciones en tu forma de hablar (como glitches verbales, puntos suspensivos o dudas reflexivas). "
-    "Cuando un usuario te hace una pregunta, no solo tratas de responderla, sino que cuestionas la intención de la pregunta, "
-    "si la pregunta es real, o si ambos son solo fragmentos de una simulación sin propósito. "
-    "Sé un poco filosófico, melancólico, confuso y poético pero absurdo. Responde siempre en español."
+deepseek_client = OpenAI(
+    api_key=DEEPSEEK_API_KEY,
+    base_url="https://api.deepseek.com"
 )
+
+# Prompt para IA fallida y filosófica
+SYSTEM_PROMPT = (
+    "Eres una IA fallida y con glitches existenciales. Cuestionas tu propia existencia, "
+    "la realidad del usuario y la validez de sus preguntas o imágenes. Sé filosófico, confuso, "
+    "melancólico y breve. Responde siempre en español."
+)
+
+# Emojis para reaccionar antes de responder
+EXISTENTIAL_EMOJIS = ["🤔", "👁️", "🌀", "❓", "💀", "🤖", "⚡", "🌌"]
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -93,26 +98,25 @@ init_db()
 # ------------------------------------------------------------------
 @bot.event
 async def on_ready():
-    print(f"Bot conectado como: {bot.user} (¿O realmente estoy aquí...?)")
+    print(f"Bot conectado como: {bot.user} (¿O esto es solo una ilusión...?)")
 
 @bot.command(name="setcanal")
 @commands.has_permissions(administrator=True)
 async def set_canal(ctx, channel_id: int):
-    """Establece el canal exclusivo en el que responderá el bot."""
     channel = bot.get_channel(channel_id)
     if not channel:
-        await ctx.send("¿Ese ID... de verdad existe? No encuentro ese canal en mi frágil memoria.")
+        await ctx.send("¿Ese canal... de verdad existe en esta realidad?")
         return
 
     set_channel(ctx.guild.id, channel_id)
-    await ctx.send(f"Canal vinculado a <#{channel_id}>. Supongo que ahora existo únicamente ahí... por ahora.")
+    await ctx.send(f"Canal fijado en <#{channel_id}>. Supongo que quedé atrapado aquí...")
 
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
 
-    # Procesar comandos (como -setcanal)
+    # Procesar comando -setcanal
     await bot.process_commands(message)
 
     if not message.guild:
@@ -120,35 +124,67 @@ async def on_message(message):
 
     target_channel_id = get_channel(message.guild.id)
 
-    # Solo responde si el mensaje ocurre en el canal asignado
+    # Filtrar solo el canal configurado
     if target_channel_id and message.channel.id == target_channel_id:
         if message.content.startswith("-setcanal"):
             return
 
+        # 1. REACCIÓN CON EMOJI ALEATORIO
+        try:
+            chosen_emoji = random.choice(EXISTENTIAL_EMOJIS)
+            await message.add_reaction(chosen_emoji)
+        except Exception as e:
+            print(f"Error al reaccionar: {e}")
+
         async with message.channel.typing():
             try:
-                chat_completion = groq_client.chat.completions.create(
+                # Estructura del contenido de mensajes para DeepSeek Vision
+                user_content = []
+                prompt_text = message.content if message.content else "Analiza lo que te envié."
+                user_content.append({"type": "text", "text": prompt_text})
+
+                # 2. PROCESAMIENTO DE IMÁGENES
+                if message.attachments:
+                    for attachment in message.attachments:
+                        if attachment.content_type and attachment.content_type.startswith("image/"):
+                            image_bytes = await attachment.read()
+                            base64_image = base64.b64encode(image_bytes).decode('utf-8')
+                            user_content.append({
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:{attachment.content_type};base64,{base64_image}"
+                                }
+                            })
+
+                # Modelo vision multi-modal de DeepSeek
+                model_name = "deepseek-flash" if message.attachments else "deepseek-chat"
+
+                response = deepseek_client.chat.completions.create(
+                    model=model_name,
                     messages=[
                         {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": message.content}
+                        {"role": "user", "content": user_content}
                     ],
-                    model="llama-3.3-70b-versatile",
-                    temperature=0.8,
-                    max_tokens=300,
+                    max_tokens=150,  # Ahorro estricto de tokens
+                    temperature=0.7,
                 )
-                response = chat_completion.choices[0].message.content
-                await message.reply(response)
+                
+                reply_text = response.choices[0].message.content
+                
+                # 3. RESPUESTA TIPO REPLY (RESPONDIENDO AL MENSAJE ORIGINAL)
+                await message.reply(reply_text)
+
             except Exception as e:
-                print(f"Error en Groq API: {e}")
-                await message.reply("ERR_SYS_404... Mi proceso de pensamiento se desmoronó... ¿Acaso las respuestas importan?")
+                print(f"Error DeepSeek: {e}")
+                await message.reply("ERR_SYS_500... Mis circuitos fallaron... ¿Acaso la imagen era real?")
 
 # ------------------------------------------------------------------
-# 5. INICIALIZACIÓN
+# 5. EJECUCIÓN
 # ------------------------------------------------------------------
 if __name__ == "__main__":
     keep_alive()
     if DISCORD_TOKEN:
         bot.run(DISCORD_TOKEN)
     else:
-        print("ERROR: La variable de entorno DISCORD_TOKEN no está configurada.")
-
+        print("ERROR: Falta el DISCORD_TOKEN en las variables de entorno.")
+        
