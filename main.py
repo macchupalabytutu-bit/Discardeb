@@ -79,7 +79,7 @@ async def on_message(message):
             prompt_text = clean_text if clean_text else "..."
 
             response = groq_client.chat.completions.create(
-                model="llama3-8b-8192",
+                model="llama-3.3-70b-versatile",
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": prompt_text}
