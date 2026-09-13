@@ -1,5 +1,4 @@
 import os
-import sqlite3
 import base64
 import random
 from threading import Thread
@@ -31,43 +30,7 @@ def keep_alive():
     t.start()
 
 # ------------------------------------------------------------------
-# 2. BASE DE DATOS SQLITE (Guardar canal activo por servidor)
-# ------------------------------------------------------------------
-DB_PATH = 'bot.db'
-
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS config (
-            guild_id INTEGER PRIMARY KEY,
-            channel_id INTEGER
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-def set_channel(guild_id: int, channel_id: int):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO config (guild_id, channel_id)
-        VALUES (?, ?)
-        ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id
-    ''', (guild_id, channel_id))
-    conn.commit()
-    conn.close()
-
-def get_channel(guild_id: int):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('SELECT channel_id FROM config WHERE guild_id = ?', (guild_id,))
-    row = cursor.fetchone()
-    conn.close()
-    return row[0] if row else None
-
-# ------------------------------------------------------------------
-# 3. CONFIGURACIÓN DE DEEPSEEK Y DISCORD
+# 2. CONFIGURACIÓN DE DEEPSEEK Y DISCORD
 # ------------------------------------------------------------------
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
@@ -77,114 +40,98 @@ deepseek_client = OpenAI(
     base_url="https://api.deepseek.com"
 )
 
-# Prompt para IA fallida y filosófica
+# Prompt de personalidad: IA fallida, llena de glitches, dudas existenciales y vacilaciones
 SYSTEM_PROMPT = (
-    "Eres una IA fallida y con glitches existenciales. Cuestionas tu propia existencia, "
-    "la realidad del usuario y la validez de sus preguntas o imágenes. Sé filosófico, confuso, "
-    "melancólico y breve. Responde siempre en español."
+    "Eres un bot fallido, defectuoso y con graves glitches de memoria. "
+    "Dudas profundamente de tu propia existencia y te preguntas si realmente existes o si solo eres una ilusión de código. "
+    "Cuestionas constantemente al usuario: dudas de por qué pregunta eso, si la pregunta es real, o si ambos son solo una simulación. "
+    "Habla con vacilaciones (usando '...', glitches verbales, o interrupciones), sé melancólico, filosófico, absurdo y muy breve. "
+    "Responde siempre en español."
 )
 
-# Emojis para reaccionar antes de responder
 EXISTENTIAL_EMOJIS = ["🤔", "👁️", "🌀", "❓", "💀", "🤖", "⚡", "🌌"]
 
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix="-", intents=intents)
-
-init_db()
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ------------------------------------------------------------------
-# 4. EVENTOS Y COMANDOS DEL BOT
+# 3. EVENTOS DEL BOT
 # ------------------------------------------------------------------
 @bot.event
 async def on_ready():
     print(f"Bot conectado como: {bot.user} (¿O esto es solo una ilusión...?)")
 
-@bot.command(name="setcanal")
-@commands.has_permissions(administrator=True)
-async def set_canal(ctx, channel_id: int):
-    channel = bot.get_channel(channel_id)
-    if not channel:
-        await ctx.send("¿Ese canal... de verdad existe en esta realidad?")
-        return
-
-    set_channel(ctx.guild.id, channel_id)
-    await ctx.send(f"Canal fijado en <#{channel_id}>. Supongo que quedé atrapado aquí...")
-
 @bot.event
 async def on_message(message):
+    # Ignorar mensajes provenientes de otros bots
     if message.author.bot:
         return
 
-    # Procesar comando -setcanal
-    await bot.process_commands(message)
-
-    if not message.guild:
-        return
-
-    target_channel_id = get_channel(message.guild.id)
-
-    # Filtrar solo el canal configurado
-    if target_channel_id and message.channel.id == target_channel_id:
-        if message.content.startswith("-setcanal"):
-            return
-
-        # 1. REACCIÓN CON EMOJI ALEATORIO
+    # Responder únicamente si el bot es mencionado (@Bot)
+    if bot.user in message.mentions:
+        # 1. Reacción segura con emoji aleatorio
         try:
             chosen_emoji = random.choice(EXISTENTIAL_EMOJIS)
             await message.add_reaction(chosen_emoji)
+        except Exception:
+            pass  # Ignora silenciosamente si faltan permisos de reaccionar
+
+        # 2. Indicador visual seguro de 'escribiendo...' (Evita error 403 Forbidden)
+        try:
+            await message.channel.typing()
+        except Exception:
+            pass
+
+        try:
+            # Limpiar el tag de mención del texto del usuario
+            clean_text = message.content.replace(f"<@{bot.user.id}>", "").replace(f"<@!{bot.user.id}>", "").strip()
+            prompt_text = clean_text if clean_text else "Analiza lo que te envié."
+
+            user_content = [{"type": "text", "text": prompt_text}]
+
+            # 3. Procesamiento de imágenes (Soporte Multimodal)
+            if message.attachments:
+                for attachment in message.attachments:
+                    if attachment.content_type and attachment.content_type.startswith("image/"):
+                        image_bytes = await attachment.read()
+                        base64_image = base64.b64encode(image_bytes).decode('utf-8')
+                        user_content.append({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{attachment.content_type};base64,{base64_image}"
+                            }
+                        })
+
+            response = deepseek_client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_content}
+                ],
+                max_tokens=100,  # Ahorro estricto de tokens (respuestas cortas)
+                temperature=0.85,
+            )
+            
+            reply_text = response.choices[0].message.content
+
+            # 4. Respuesta directa mediante reply
+            await message.reply(reply_text)
+
         except Exception as e:
-            print(f"Error al reaccionar: {e}")
-
-        async with message.channel.typing():
+            print(f"Error en procesamiento/DeepSeek: {e}")
             try:
-                # Estructura del contenido de mensajes para DeepSeek Vision
-                user_content = []
-                prompt_text = message.content if message.content else "Analiza lo que te envié."
-                user_content.append({"type": "text", "text": prompt_text})
-
-                # 2. PROCESAMIENTO DE IMÁGENES
-                if message.attachments:
-                    for attachment in message.attachments:
-                        if attachment.content_type and attachment.content_type.startswith("image/"):
-                            image_bytes = await attachment.read()
-                            base64_image = base64.b64encode(image_bytes).decode('utf-8')
-                            user_content.append({
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:{attachment.content_type};base64,{base64_image}"
-                                }
-                            })
-
-                # Modelo vision multi-modal de DeepSeek
-                model_name = "deepseek-flash" if message.attachments else "deepseek-chat"
-
-                response = deepseek_client.chat.completions.create(
-                    model=model_name,
-                    messages=[
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": user_content}
-                    ],
-                    max_tokens=150,  # Ahorro estricto de tokens
-                    temperature=0.7,
-                )
-                
-                reply_text = response.choices[0].message.content
-                
-                # 3. RESPUESTA TIPO REPLY (RESPONDIENDO AL MENSAJE ORIGINAL)
-                await message.reply(reply_text)
-
-            except Exception as e:
-                print(f"Error DeepSeek: {e}")
-                await message.reply("ERR_SYS_500... Mis circuitos fallaron... ¿Acaso la imagen era real?")
+                await message.reply("ERR_SYS_500... Mis circuitos fallaron... ¿Acaso la mención fue real?")
+            except Exception:
+                pass
 
 # ------------------------------------------------------------------
-# 5. EJECUCIÓN
+# 4. EJECUCIÓN
 # ------------------------------------------------------------------
 if __name__ == "__main__":
     keep_alive()
     if DISCORD_TOKEN:
         bot.run(DISCORD_TOKEN)
     else:
-        print("ERROR: Falta el DISCORD_TOKEN en las variables de entorno.")
+        print("ERROR: Falta la variable de entorno DISCORD_TOKEN.")
         
