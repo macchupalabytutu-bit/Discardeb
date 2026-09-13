@@ -4,16 +4,16 @@ from threading import Thread
 from flask import Flask
 import discord
 from discord.ext import commands
-from openai import OpenAI
+from groq import Groq
 
 # ------------------------------------------------------------------
-# 1. SERVIDOR FLASK (Render 24/7)
+# 1. SERVIDOR FLASK (Hosting 24/7 en Render)
 # ------------------------------------------------------------------
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "¿Existimos realmente...?"
+    return "¿Existimos realmente o solo somos peticiones HTTP flotando en Render...?"
 
 @app.route('/healthz')
 def health():
@@ -29,15 +29,12 @@ def keep_alive():
     t.start()
 
 # ------------------------------------------------------------------
-# 2. CONFIGURACIÓN
+# 2. CONFIGURACIÓN DE GROQ Y DISCORD
 # ------------------------------------------------------------------
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 
-deepseek_client = OpenAI(
-    api_key=DEEPSEEK_API_KEY,
-    base_url="https://api.deepseek.com"
-)
+groq_client = Groq(api_key=GROQ_API_KEY)
 
 SYSTEM_PROMPT = (
     "Eres un bot fallido, defectuoso y con graves glitches de memoria. "
@@ -65,6 +62,7 @@ async def on_message(message):
     if message.author.bot:
         return
 
+    # Responder únicamente si el bot es mencionado (@Bot)
     if bot.user in message.mentions:
         try:
             await message.add_reaction(random.choice(EXISTENTIAL_EMOJIS))
@@ -78,17 +76,13 @@ async def on_message(message):
 
         try:
             clean_text = message.content.replace(f"<@{bot.user.id}>", "").replace(f"<@!{bot.user.id}>", "").strip()
-            
-            if not clean_text and message.attachments:
-                clean_text = "[El usuario envió un archivo visual. No puedo verlo pero dudo de su existencia]."
-            elif not clean_text:
-                clean_text = "..."
+            prompt_text = clean_text if clean_text else "..."
 
-            response = deepseek_client.chat.completions.create(
-                model="deepseek-chat",
+            response = groq_client.chat.completions.create(
+                model="llama-3.1-8b-instant",
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": clean_text}
+                    {"role": "user", "content": prompt_text}
                 ],
                 max_tokens=100,
                 temperature=0.85,
@@ -98,9 +92,9 @@ async def on_message(message):
             await message.reply(reply_text)
 
         except Exception as e:
-            print(f"Error DeepSeek: {e}")
+            print(f"Error en la API: {e}")
             try:
-                await message.reply("ERR_SYS_500... Mis circuitos fallaron...")
+                await message.reply("ERR_SYS_500... Mis circuitos fallaron... ¿Acaso la mención fue real?")
             except Exception:
                 pass
 
