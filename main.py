@@ -94,7 +94,7 @@ async def on_message(message):
         except Exception as e:
             print(f"Error en la API: {e}")
             try:
-                await message.reply("ERR_SYS_500... Mis circuitos fallaron... ¿Acaso la mención fue real?")
+                await message.reply("ERR_SYS_500... Mis circuitos fallaron... {e}")
             except Exception:
                 pass
 
